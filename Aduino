@@ -1,0 +1,151 @@
+#include <SoftwareSerial.h >//시리얼통신 라이브러리 호출
+//부저 핀번호
+const int buzzPin =3;
+int sound;
+//1번 RGB LED
+const int RED_PIN1 =53;
+const int GREEN_PIN1 =52;
+const int BLUE_PIN1 =51;
+//2번 RGB LED
+const int RED_PIN2 =49;
+const int GREEN_PIN2 =48;
+const int BLUE_PIN2 =47;
+//3번 RGB LED
+const int RED_PIN3 =45;
+const int GREEN_PIN3 =44;
+const int BLUE_PIN3 =43;
+//4번 RGB LED
+const int RED_PIN4 =41;
+const int GREEN_PIN4 =40;
+const int BLUE_PIN4 =39;
+//5번 RGB LED
+const int RED_PIN5 =37;
+const int GREEN_PIN5 =36;
+const int BLUE_PIN5 =35;
+String command ="";
+int flag =0;
+//온도 센서 관련 변수
+float temperature;  
+int reading;  
+int lm35Pin = A5;
+//사운드 센서
+int soundPin = A3;
+//빛 센서
+int lightPin =A0;
+void setup() //pin setup 함수 
+{
+  Serial.begin(9600);   //시리얼모니터
+  Serial1.begin(9600); //블루투스 시리얼
+  //부저, led otput으로 지정
+  pinMode(buzzPin, OUTPUT);
+    //1번 RGB LED
+  pinMode(RED_PIN1, OUTPUT);    
+  pinMode(GREEN_PIN1, OUTPUT); 
+  pinMode(BLUE_PIN1, OUTPUT);      
+  //2번 RGB LED
+  pinMode(RED_PIN2, OUTPUT);    
+  pinMode(GREEN_PIN2, OUTPUT); 
+  pinMode(BLUE_PIN2, OUTPUT);    
+  //3번 RGB LED
+  pinMode(RED_PIN3, OUTPUT);    
+  pinMode(GREEN_PIN3, OUTPUT); 
+  pinMode(BLUE_PIN3, OUTPUT);      
+  //4번 RGB LED
+  pinMode(RED_PIN4, OUTPUT);    
+  pinMode(GREEN_PIN4, OUTPUT); 
+  pinMode(BLUE_PIN4, OUTPUT);      
+  //5번 RGB LED
+  pinMode(RED_PIN5, OUTPUT);    
+  pinMode(GREEN_PIN5, OUTPUT); 
+  pinMode(BLUE_PIN5, OUTPUT);     
+}
+void start(){  
+      //1-4번 LED 연보라색으로 불빛 출력
+  digitalWrite(buzzPin, HIGH);    
+  digitalWrite(RED_PIN1,LOW);      
+  digitalWrite(GREEN_PIN1,HIGH);
+  digitalWrite(BLUE_PIN1,LOW);  
+  
+  digitalWrite(RED_PIN2,LOW);      
+  digitalWrite(GREEN_PIN2,HIGH);
+  digitalWrite(BLUE_PIN2,LOW);  
+  
+  digitalWrite(RED_PIN3,LOW);      
+  digitalWrite(GREEN_PIN3,HIGH);
+  digitalWrite(BLUE_PIN3,LOW);  
+  
+  digitalWrite(RED_PIN4,LOW);      
+  digitalWrite(GREEN_PIN4,HIGH);
+  digitalWrite(BLUE_PIN4,LOW);
+  
+  digitalWrite(RED_PIN5,LOW);      
+  digitalWrite(GREEN_PIN5,HIGH);
+  digitalWrite(BLUE_PIN5,LOW);
+  
+  if(command =="Light") //명령어가 Light이라면
+      {
+        while(1){
+          int cds =analogRead(lightPin); //빛 센서로 들어온 값이 
+          if(cds >200) //20이상이라면
+            break;//알람 종료 
+        }     
+      }
+      else if(command =="Sound") //명령어가 Sound이라면
+      {
+        Serial.println(command);
+        while(1){
+          
+          sound = analogRead(soundPin); //sound 센서로 들어온 값이
+          if(sound >200){ //200이상이라면
+            Serial.println("alarmEnd");
+            break;//알람 종료 
+            }
+          Serial.println(soundPin);
+             
+          }  
+      }
+      else if(command =="Tem") //명령어가 Tem이라면
+      {
+        while(1){
+          reading = analogRead(lm35Pin); //온습도 센서로 들어온 값이
+          temperature = (5.0 * reading *100.0) /1024;//들어온 값을 변환한 후
+          if(temperature <20 )//20보다 작다면 
+            break;//알람 종료 
+        }
+      }
+      //부저 소리 OFF
+      //Led 종료 
+      Serial1.println("D"); //알람이 끝났음을 안드로이드에게 알림.
+      digitalWrite(buzzPin, LOW);
+      digitalWrite(RED_PIN1,HIGH);      
+      digitalWrite(GREEN_PIN1,HIGH);
+      digitalWrite(BLUE_PIN1,HIGH);  
+      digitalWrite(RED_PIN2,HIGH);      
+      digitalWrite(GREEN_PIN2,HIGH);
+      digitalWrite(BLUE_PIN2,HIGH);  
+      digitalWrite(RED_PIN3,HIGH);      
+      digitalWrite(GREEN_PIN3,HIGH);
+      digitalWrite(BLUE_PIN3,HIGH);  
+      digitalWrite(RED_PIN4,HIGH);      
+      digitalWrite(GREEN_PIN4,HIGH);
+      digitalWrite(BLUE_PIN4,HIGH);    
+    digitalWrite(RED_PIN5,HIGH);      
+    digitalWrite(GREEN_PIN5,HIGH);
+    digitalWrite(BLUE_PIN5,HIGH);
+           
+}
+void loop() //매번 반복 함수 
+{
+  while(Serial1.available()) //블루투스 시리얼로 부터 데이터가 들어온다면
+  {
+    char temp = (char)Serial1.read(); //데이터 먼저 char형으로 받고
+    command += temp; //string 형으로 변환 
+    flag =0;
+    //delay(10);
+    if(command =="Light"||//만약 데이터가 Light이나 Sound나 Tem이라면
+    command=="Sound"||
+    command=="Tem"){
+        start(); //알람 동작 시작     
+      }
+   } 
+  }
