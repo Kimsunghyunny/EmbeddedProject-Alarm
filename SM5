@@ -1,0 +1,468 @@
+#include <unistd.h >
+#include <fcntl.h >
+#include <sys /mman.h >
+#include <stdio.h >
+#include <assert.h >
+#include <arpa /inet.h >
+#include <sys /types.h >
+#include <sys /socket.h >
+#include <string.h >
+#include <time.h >//시간을 받아올 수 있는 헤더파일
+#define SERV_IP_ADDR "172.20.10.10"//연결 서버 ip주소
+#define FPGA_BASEADDRESS       0x05000000     // FPGA Base Address
+#define LED_OFFSET_ADDR      0x20              // LED 제어 레지스터 주소
+#define TEXTLCD_OFFSET      0x10 //TEXTKCD 제어 레지스터 주소
+#define KEY_KEYOUT_OFFSET 0x70 //KEYPAD 제어 레지스터 주소
+#define KEY_SCAN_OFFSET 0x72 //KEYPAD 제어 레지스터 주소
+#define SEG_Sel_Reg 0x30 //SEGMENATION 제어 레지스터 주소
+#define SEG_Data_Reg 0x32 //SEGMENTAION 제어 레지스터 주소
+#define SIZE 512
+#define BUFF_SIZE 1024
+int flag =0;//mode를 확인하기 위한 flag
+//시간을 저장하기 위한 배열과 정수 변수
+int set_hour[2]; 
+int set_min[2];
+int set_hour2 =0;
+int set_min2 =0;
+int count =0; //알람의 시간을 몇번 입력하였는지 count하는 변수
+unsigned short data[6]; //SEG에 출력할 값을 저장하는 배열
+unsigned short digit[6] = { 0x20, 0x10, 0x08, 0x04, 0x02, 0x01 }; // SEGMENT의 위치
+int pr(short value); //값이 변경될때마다 출력하는 print 함수
+//keypad 관련 함수
+int clear_display();
+int return_home();
+int entry_mode_set(int increase, int nshift);
+int display_control(int display_enable, int cursor_enable, int nblink);
+int cursor_shift(int set_screen, int set_rightshit);
+int function_set(int rows, int nfonts);
+int set_ddram_address(int pos);
+void writebyte(char ch);
+void setcommand(unsigned short command);
+void initialize_textlcd();
+unsigned short GetSegCode(int digit);
+unsigned short * Textlcd;
+//통신 함수
+void initial();
+//소켓 통신을 위한 변수와 구조체, 배열 선언
+int   server_socket;
+int   client_socket1;
+int   client_addr_size1;
+struct sockaddr_in   server_addr;
+struct sockaddr_in   client_addr1;
+char   buff_rcv[BUFF_SIZE +5];
+char   buff_snd[BUFF_SIZE +5];
+int main() { //메인함수
+   initial();
+   alarm_set();
+   close(server_socket);
+}
+void initial() {
+   server_socket = socket(PF_INET, SOCK_STREAM, 0);
+   if (-1 == server_socket) //소켓 생성이 실패 했을 때 
+   {
+      printf("server socket 생성 실패\n");
+      exit(1);
+   }
+   else { // 소켓 생성 성공
+      printf("Success\n");
+   }
+   memset(&server_addr, 155, sizeof(server_addr));
+   server_addr.sin_family = AF_INET;
+   server_addr.sin_addr.s_addr = inet_addr(SERV_IP_ADDR);
+   server_addr.sin_port = htons(9999);
+   printf("after IP주소 = %s, 포트번호 = %d\n", inet_ntoa(server_addr.sin_addr), ntohs(server_addr.sin_port)); 
+   if (-1 == bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr))) //바인드 실행 실패
+   {
+      perror("bind error : ");
+      exit(0);
+   }
+   else { //바인드 성공
+      printf("success2\n");
+   }
+   if (-1 == listen(server_socket, 5)) //클라이언트를 listen에 실패
+   {
+      printf("listen() 실행 실패\n");
+      exit(1);
+   }
+   else { //listen 성공
+      printf("success3\n");
+   }
+   printf("안드로이드 클라이언트를 연결해주세요!\n");
+   while (1) { //클라이언트의 연결이 들어오면, accept 실행
+      client_addr_size1 =sizeof(client_addr1);
+      client_socket1 = accept(server_socket, (struct sockaddr *)&client_addr1, &client_addr_size1);
+      if (-1 == client_socket1)
+      {
+         printf("클라이언트1 연결 수락 실패\n");
+         exit(1);
+      }
+      else
+         break;
+   }
+   printf("연결성공!\n");
+}
+void alarm_set() //sm5의 알람을 저장하기 위한 동작을 하는 함수
+{
+   short value;
+   unsigned short *addr_fpga;
+   unsigned short *keypad_scan_addr, *keypad_keyout_addr;
+   unsigned short *addr_seg_sel, *addr_seg_data;
+   unsigned short int *addr_led;
+   int fd; 
+   int quit =0;
+   if ((fd = open("/dev/mem", O_RDWR | O_SYNC)) <0) {
+      perror("mem open fail\n");
+      exit(1);
+   }
+   //시간 저장 배열 초기화
+   set_hour[0] =0;
+   set_hour[1] =0;
+   set_min[0] =0; 
+   set_min[0] =0;
+   addr_fpga = (unsigned short *)mmap(NULL, 4096, PROT_WRITE | PROT_READ, MAP_SHARED, fd, FPGA_BASEADDRESS);//FPGA의 가상주소
+   keypad_scan_addr = addr_fpga + KEY_SCAN_OFFSET /sizeof(unsigned short);//KEYPAD의 SCAN을 위한 가상주소
+   keypad_keyout_addr = addr_fpga + KEY_KEYOUT_OFFSET /sizeof(unsigned short); //KEYPAD의 OUT을 위한 가상주소
+   Textlcd = addr_fpga + TEXTLCD_OFFSET /sizeof(unsigned short);
+   addr_seg_sel = addr_fpga + SEG_Sel_Reg /sizeof(unsigned short); // SEG_SEL의 가상주소
+   addr_seg_data = addr_fpga + SEG_Data_Reg /sizeof(unsigned short); // SEG_DATA의가상주소
+   addr_led = addr_fpga + LED_OFFSET_ADDR /sizeof(unsigned short int); //LED의 가상주소
+   //KEYPAD에 출력할 내용을 배열에 저장
+   char buf1[] ="Smart Alarm"; 
+   char buf2[] ="Embedded.."; 
+   
+   //TEXTLCD 초기화
+   initialize_textlcd();
+   int i;
+   set_ddram_address(0x00);
+   for (i =0; i < strlen(buf1); i ++) { //TEXTLCD의 첫번째 줄 출력
+      writebyte(buf1[i]);
+   }
+   set_ddram_address(0x40);
+   for (i =0; i < strlen(buf2); i ++) //TEXTLCD의 첫번째 줄 출력
+   {
+      writebyte(buf2[i]);
+   }
+   set_ddram_address(0x00);
+   time_t timer;
+   struct tm *t;
+   printf("start!\n");
+   while (!quit) {
+      timer = time(NULL); // 현재 시각을 초 단위로 얻기
+      t = localtime(&timer); // 초 단위의 시간을 분리하여 구조체에 넣기
+      if (flag ==1) {//알람시간 저장받는 동작하는 코드
+         *addr_led =0x00FF;// 모든 LED 켜기
+         usleep(2000);
+         if (count <4) { //시간 분에 대한 4개의 숫자를 받지 않으면 COUNT가 4보다 작음
+            *keypad_scan_addr =0x01;
+            usleep(1400);
+            value =*keypad_keyout_addr &0x0f;
+            *keypad_scan_addr =0x00;
+            switch (value) { // keypad의 첫번째 줄에 1부터 4까지의 값을 입력 받음
+            case 0x01: value =0x01; break;
+            case 0x02: value =0x02; break;
+            case 0x04: value =0x03; break;
+            case 0x08: value =0x04; break;
+            }
+            if (value !=0x00) {
+               Set_time(value);
+               pr(value);
+               if (count <=2) {//segment에 출력할때 시 를 출력할 때 seg에 출력
+                  data[0] = GetSegCode(set_hour[count -1]);
+                  *addr_seg_sel = digit[5 -count];
+                  *addr_seg_data = data[0];
+               }
+               else {//seg에 분을 출력할 때  seg에 출력
+                  data[0] = GetSegCode(set_min[count -3]);
+                  *addr_seg_sel = digit[5 -count];
+                  *addr_seg_data = data[0];
+               }
+            }
+            *keypad_scan_addr =0x02;
+            usleep(1400);
+            value =*keypad_keyout_addr &0x0f;
+            *keypad_scan_addr =0x00;
+            switch (value) { // keypad의 첫번째 줄에 5부터 8까지의 값을 입력 받음
+            case 0x01: value =0x05; break;
+            case 0x02: value =0x06; break;
+            case 0x04: value =0x07; break;
+            case 0x08: value =0x08; break;
+            }
+            if (value !=0x00) {
+               Set_time(value);
+               pr(value);
+               if (count <=2) {//segment에 출력할때 시 를 출력할때
+                  data[0] = GetSegCode(set_hour[count -1]);
+                  *addr_seg_sel = digit[5 -count];
+                  *addr_seg_data = data[0];
+               }
+               else {//seg에 분을 출력할 때
+                  data[0] = GetSegCode(set_min[count -3]);
+                  *addr_seg_sel = digit[5 -count];
+                  *addr_seg_data = data[0];
+               }
+            }
+            *keypad_scan_addr =0x04;
+            usleep(1400);
+            value =*keypad_keyout_addr &0x0f;
+            *keypad_scan_addr =0x00;
+            switch (value) { // keypad의 첫번째 줄에 9와 0의 값을 입력 받음
+            case 0x01: value =0x09; break;
+            case 0x02: value =0x0A; break;
+            case 0x04: break;
+            case 0x08: break;
+            }
+            if (value !=0x00) {
+               Set_time(value);
+               pr(value);
+               if (count <=2) {//segment에 출력할때 시 를 출력할때
+                  if (value ==0x0A) data[0] =0xfc;
+                  else data[0] = GetSegCode(set_hour[count -1]);
+                  *addr_seg_sel = digit[5 -count];
+                  *addr_seg_data = data[0];
+               }
+               else {//seg에 분을 출력할 때
+                  if (value ==0x0A) data[0] =0xfc;
+                  else data[0] = GetSegCode(set_min[count -3]);
+                  *addr_seg_sel = digit[5 -count];
+                  *addr_seg_data = data[0];
+               }
+            }
+         }
+         *keypad_scan_addr =0x08;
+         usleep(1400);
+         value =*keypad_keyout_addr &0x0f;
+         *keypad_scan_addr =0x00;
+         switch (value) { keypad의 4번재 줄에서 2,3,4번째 키는 의미를 가짐
+         case 0x01: break;
+         case 0x02: value =0x0B; break; // 취소 버튼
+         case 0x04: value =0x0C; break; // 통신보내는 save 버튼
+         case 0x08:
+            value =0x0D;
+            break;
+         }
+         if (value !=0x00)
+            pr(value);
+         if (value ==0x0D) {//exit 버튼을 눌렀을 때
+            if (flag ==1) //알람 시간 저장 모드이면
+               flag =0;  //기본 메뉴로 돌아감
+            count =0;
+            *addr_led =0x0000; //led를 모두 끔
+            usleep(2000);
+         }
+         else if (value ==0x0C) {//연결된 통신에 값을 날림
+            char temp[4];
+            int j;
+            for (j =0; j <2; j ++) {
+               temp[j] = set_hour[j] +'0';
+            }
+            for (j =2; j <4; j ++) {
+               temp[j] = set_min[j -2] +'0';
+            }
+            write(client_socket1, temp, 4);
+            flag =0;
+            count =0;
+            *addr_led =0x0000;
+            usleep(2000);
+         }
+         else if (value ==0x0B) { //저장된 알람 값 reset버튼
+            count =0;
+            set_hour[0] =0; set_hour[0] =0;
+            set_min[0] =0; set_min[0] =0;
+         }
+      }
+      else {//기본 메뉴 키패드
+         //처음 실행에서 첫번째 줄의 첫번째 키를 누르면 알람 시간 입력받는 모드, 두번째 키를 누르면 원터치 시간 저장
+         *keypad_scan_addr =0x01;
+         usleep(1500);
+         value =*keypad_keyout_addr &0x0f;
+         *keypad_scan_addr =0x00;
+         switch (value) {
+         case 0x01: {flag =1; printf("flag = %d\n", flag); pr(value); break; }
+         case 0x02: {
+            set_hour2 = t ->tm_hour;
+            set_min2 = t ->tm_min +1;
+            pr(value);
+            char temp[4];
+            temp[0] = set_hour2 /10 +'0';
+            temp[1] = set_hour2 % 10 +'0';
+            temp[2] = set_min2 /10 +'0'; 
+            temp[3] = set_min2 % 10 +'0';
+            data[0] = GetSegCode(set_hour2 /10);//시간의 십의자리
+            data[1] = GetSegCode(set_hour2 &10);//시간의 일의자리
+            data[2] = GetSegCode(set_min2 /10);//분의 십의자리
+            data[3] = GetSegCode(set_min2 % 10);//분의 일의자리
+            //7Seg에 가장 왼쪽에서부터 현재 시간을 한자리씩 출력
+            *addr_seg_sel = digit[5];
+            *addr_seg_data = data[0];
+            usleep(500000);
+            *addr_seg_sel = digit[4];
+            *addr_seg_data = data[1];
+            usleep(500000);
+            *addr_seg_sel = digit[3];
+            *addr_seg_data =0x01;
+            usleep(500000);
+            *addr_seg_sel = digit[2];
+            *addr_seg_data = data[2];
+            usleep(500000);
+            *addr_seg_sel = digit[1];
+            *addr_seg_data = data[3];
+            usleep(500000);
+            write(client_socket1, temp, 4);
+            break;
+         }
+         }
+      }
+   } //while문 종료
+   munmap(addr_fpga, 4096); // 가상주소로 잡은 것을 해제
+   close(fd);
+   return 0;
+}
+int Set_time(int value) {
+   if (count !=2) {
+      if (value ==0x0A) { //0을 눌렀을 때
+         set_hour[count] =0;
+      }
+      else { //0이 아닌 다른 값을 눌렀을 때
+         set_hour[count] = (int)value;
+      }
+      count++;
+   }
+   else if (count >=2 && count <4) {
+      if (value ==0x10) set_min[count] =0;
+      else {
+         set_min[count -2] = (int)value;
+      }
+      count++;
+   }
+   else if (count >=4) {
+      count =0;
+   }
+}
+int pr(short value) //값들을 출력하는 함수
+{
+   if (value !=16) {
+      printf("\n pressed key = %d\n", value);//아스키값을 문자로 출력
+      usleep(35000);
+      printf("set_time = %d", set_hour[0]); printf("%d", set_hour[1]);
+      printf("set_min = %d", set_min[0]); printf("%d", set_min[1]);
+      printf("set_time = %d", set_hour2);
+      printf("set_min = %d", set_min2);
+      printf("\nflag = %d", flag);
+      printf("count = %d", count);
+   }
+   else if (value ==16) {
+      printf("exit");
+   }
+}
+void initialize_textlcd()
+{
+   function_set(2, 0); // 2줄을 쓸 것이며, 5*8 dots를 사용
+   display_control(1, 0, 0); // display는 켜고, cursor와 blink는 사용하지 않음
+   clear_display(); // text lcd 화면 소거
+   entry_mode_set(1, 0); // 커서의 위치를 증가시키고 Entire shift는 off로 함
+   return_home(); // 커서를 Home의 위치로 옮김
+}
+void setcommand(unsigned short command)
+{
+   command &=0x00FF;         // 앞 8 비트 : 0000 0000 -> RS = 0 / RW = 0 / E = 0
+                        // 뒤 8 비트 : 그대로 유지 !!
+   *Textlcd = command |0x0000;   // Enable bit = 0 : 실행하지 않음
+   usleep(1000);
+   *Textlcd = command |0x0100;   // 앞 8 비트 : 0000 0001 -> E = 1 -> 명령어 실행
+                           // 뒤 8 비트 : command 값을 유지
+   usleep(100000); // Enable bit이 1이 된 경우만 Text LCD에 표현되기 때문
+   *Textlcd = command |0x0000;   // Enable bit = 0 : 실행하지 않음
+   usleep(1000);
+}
+int function_set(int rows, int ndots)
+{ // function_set operation의 경우에는 파라미터로 받을 수 있는 비트가 총 3개로
+  // 본래 DL(4bits or 8bits) , N(2lines or 1line), F(5*11dots or 5*8dots)이나
+  // 현재의 함수는 DL이 항상 1, 즉 8bits로 설정되어있는 것을 가정한다.
+   unsigned short command =0x30;       // = 0011 0000
+   if (rows ==2) // 파라미터로 넘어온 rows를 통해 N비트 값을 설정
+      command |=0x08;   // = 0011 0000 | 0000 1000 = 0011 1000
+   else if (rows ==1)
+      command &=0xf7;   // = 0011 0000 & 1111 0111 = 0011 0000
+   else
+      return -1;
+   command = ndots ? (command |0x04) : command;   // 1 : 0011 X100
+   // 파라미터로 넘어온 ndots를 통해 F 비트 값을 설정                                    // 0 : 0011 X000
+   setcommand(command);                  // 앞 8 비트의 끝 3비트를 000으로 하고, 실행!!
+   return 1;
+}
+int display_control(int display_enable, int cursor_enable, int nblink)
+{
+   unsigned short command =0x08;                     // = 0000 1000
+   // display, cursor ,blink에 대해서 넘어온 파라미터 bits를 설정
+   command = display_enable ? (command |0x04) : command;    // 1 : 0000 1100
+   command = cursor_enable ? (command |0x02) : command;    // 1 : 0000 1X10
+   command = nblink ? (command |0x01) : command;          // 1 : 0000 1XX1
+   setcommand(command);
+   // 앞 8 비트의 끝 3비트를 000으로 하고, 실행!!
+   return 1;
+}
+int clear_display()
+{ // 데이터 레지스터 부분의 최하위 비트만을 1로 만듬.Operation 내장됨.
+   unsigned short command =0x01;   // = 0000 00001
+   setcommand(command);         // 앞 8 비트의 끝 3비트를 000으로 하고, 실행!!
+   return 1;
+}
+int entry_mode_set(int increase, int nshift)
+{ // increment 여부와 shift 여부를 넘어온 파라미터 bits를 통해 설정
+   unsigned short command =0x04;               // = 0000 0100
+   command = increase ? (command |0x2) : command;   // 1 : 0000 0110
+   command = nshift ? (command |0x1) : command;   // 1 : 0000 01X1
+   setcommand(command);                  // 앞 8 비트의 끝 3비트를 000으로 하고, 실행!!
+   return 1;
+}
+int return_home()
+{ // 차 하위비트를 1로 만듬. 커서를 Home으로 옮기는 내장 Operation
+   unsigned short command =0x02;   // = 0000 0010
+   setcommand(command);         // 앞 8 비트의 끝 3비트를 00 0으로 하고, 실행!!
+   return 1;
+}
+int cursor_shift(int set_screen, int set_rightshit)
+{
+   unsigned short command =0x10;                     // = 0001 0000
+   command = set_screen ? (command |0x08) : command;      // 1 : 0001 1000
+   command = set_rightshit ? (command |0x04) : command;   // 1 : 0001 X100
+   setcommand(command);                  // 앞 8 비트의 끝 3비트를 000으로 하고, 실행!!
+   return 1;
+}
+int set_ddram_address(int pos)
+{ // DDRAM의 위치를 매개변수로 넘어온 pos로 옮김.         // pos = addr = 0XXX XXXX
+   unsigned short command =0x80;         // = 1000 0000
+   command += pos;                     // = 1XXX XXXX
+   setcommand(command);               // 앞 8 비트의 끝 3비트를 000으로 하고, 실행!!
+   return 1;
+}
+void writebyte(char ch)
+{      // ch = XXXX XXXX
+   unsigned short data;
+   data = ch &0x00FF;            // ch & 0000 0000 1111 1111 = ch
+   *Textlcd = data &0x400;// ch & 0000 0100 0000 0000 = 0000 0100 0000 0000
+   usleep(1000);               // E = 0
+   *Textlcd = data |0x500;// ch | 0000 0101 0000 0000 = 0000 0101 ch = W-ch
+   usleep(1000);               // E = 1
+   *Textlcd = data &0x400;// ch & 0000 0100 0000 0000 = 0000 0100 0000 0000
+   usleep(1000);               // E = 0
+   //매개변수로 넘어온 char 변수를 Text LCD에 적는 Operation. Enable bit을 1로 만들어줌.
+}
+unsigned short GetSegCode(int digit)
+// 각 숫자에 따라 SEGMENT를 출력하기 위해서 DATA값 저장
+{
+   unsigned int code;
+   switch (digit)
+   {
+   case 0: code =0xfc; return code;
+   case 1: code =0x60; return code;
+   case 2: code =0xda; return code;
+   case 3: code =0xf2; return code;
+   case 4: code =0x66; return code;
+   case 5: code =0xb6; return code;
+   case 6: code =0xbe; return code;
+   case 7: code =0xe4; return code;
+   case 8: code =0xf3; return code;
+   case 9: code =0xf6; return code;
+   }
+}
